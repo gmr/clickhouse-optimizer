@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__aweber_memory__find_memories_by_name",
+      "Bash(mkdir:*)",
+      "Read(//Users/gmr/Source/gmr/g2g-migration/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
