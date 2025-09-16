@@ -26,11 +26,6 @@ class OptimizerSettings(pydantic_settings.BaseSettings):
     password: pydantic.SecretStr = pydantic.Field(
         description='Password for authentication'
     )
-    dry_run: bool = pydantic.Field(
-        default=False,
-        description='Show what would be done without executing',
-        alias='dry-run',
-    )
     optimize_timeout: int = pydantic.Field(
         default=43200,
         description='Maximum seconds to wait for merges',
@@ -43,11 +38,6 @@ class OptimizerSettings(pydantic_settings.BaseSettings):
     )
     verbose: bool = pydantic.Field(
         default=False, description='Enable verbose logging'
-    )
-    checkpoint_file: str | None = pydantic.Field(
-        default=None,
-        description='Path to checkpoint file for resuming progress',
-        alias='checkpoint-file',
     )
     table_name: pydantic_settings.CliPositionalArg[str] = pydantic.Field(
         description='Table to optimize'

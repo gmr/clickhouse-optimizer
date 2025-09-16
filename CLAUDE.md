@@ -11,9 +11,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `pre-commit run --all-files` - Run pre-commit hooks on all files
 - `python -m build` - Build package distributions
 
+### Testing & Coverage
+- `coverage run -m pytest` - Run tests with coverage tracking
+- `coverage report` - Show coverage report in terminal
+- `coverage html` - Generate HTML coverage report
+
 ### Running the Tool
 - `clickhouse-optimizer --help` - Show CLI help and all options
-- `clickhouse-optimizer --dry-run <table>` - Preview what would be optimized without executing
 - `clickhouse-optimizer --verbose <table>` - Run with detailed logging
 - Environment variables can be used for connection settings (CH_HOST, CH_USER, etc.)
 
