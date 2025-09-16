@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import datetime
+import dataclasses
 import logging
 import pathlib
 import re
@@ -10,12 +10,17 @@ import time
 import typing
 
 import clickhouse_driver
-from clickhouse_driver import errors
 from rich import console, progress
 
 from clickhouse_optimizer import settings
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class ActiveMerge:
+    progress: float
+    elapsed: float
 
 
 class ClickHouseOptimizer:
@@ -35,7 +40,19 @@ class ClickHouseOptimizer:
         self.console = console.Console()
         self.dry_run = optimizer_settings.dry_run
         self.optimize_timeout = optimizer_settings.optimize_timeout
+        self.optimize_task: progress.TaskID | None = None
         self.poll_interval = optimizer_settings.poll_interval
+        self.progress: progress.Progress = progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn('[progress.description]{task.description}'),
+            progress.MofNCompleteColumn(),
+            progress.BarColumn(),
+            progress.TaskProgressColumn(),
+            progress.TimeElapsedColumn(),
+            progress.TimeRemainingColumn(),
+            get_time=time.time,
+        )
+        self.start_time: float | None = None
         self.table_name = optimizer_settings.table_name
         self.checkpoint_file = (
             pathlib.Path(optimizer_settings.checkpoint_file)
@@ -44,344 +61,150 @@ class ClickHouseOptimizer:
         )
         self.database = optimizer_settings.database
 
-    def get_recent_single_part_partitions(self) -> set[str]:
-        """Get partitions with only 1 part modified within last 30 days."""
+    def run(self) -> None:
+        partitions = self._get_table_partitions()
+        if not partitions:
+            LOGGER.warning(
+                'No active partitions found for table %s', self.table_name
+            )
+            return
+        self.optimize_task = self.progress.add_task(
+            f'Optimizing {self.database}.{self.table_name}',
+            total=len(partitions),
+        )
+        self.progress.start()
+        self.start_time = time.time()
+        for partition in partitions:
+            try:
+                self._optimize_partition(
+                    partition['partition_id'], partition['partition']
+                )
+            except TimeoutError:
+                break
+            self.progress.update(self.optimize_task, advance=1)
+        self.progress.stop()
+
+    @property
+    def progress_tasks(self) -> dict[progress.TaskID, progress.Task]:
+        return self.progress._tasks
+
+    def _get_optimized_partitions(self) -> set[str]:
+        """Get partitions with only 1 part, optimized already."""
         query = re.sub(
             r'\s+',
             ' ',
             """\
-        SELECT
-            database,
-            table,
-            partition_id,
-            count(*) AS part_count,
-            max(modification_time) AS latest_part_time
-        FROM system.parts
-        WHERE (active = 1)
-          AND (table = %(table_name)s)
-          AND (database = %(database)s)
-        GROUP BY database, table, partition_id
-        HAVING part_count = 1
-          AND latest_part_time > (now() - INTERVAL 30 DAY)
-        ORDER BY latest_part_time DESC
-        """,
+             SELECT partition_id
+               FROM system.parts
+              WHERE (active = 1)
+                AND (database = %(database)s)
+                AND (table = %(table_name)s)
+           GROUP BY database, table, partition_id
+             HAVING count(*) = 1""",
         )
         result = self.client.execute(
-            query, {'table_name': self.table_name, 'database': self.database}
+            query, {'database': self.database, 'table_name': self.table_name}
         )
-        return {row[2] for row in result}  # partition_id is at index 2
+        return {row[0] for row in result}
 
-    def get_table_partitions(self) -> list[dict[str, typing.Any]]:
+    def _get_table_partitions(self) -> list[dict[str, typing.Any]]:
         """Get all partitions excluding recent single-part ones."""
         query = re.sub(
             r'\s+',
             ' ',
             """\
-        SELECT DISTINCT partition_id, partition
-          FROM system.parts
-         WHERE table = %(table_name)s
-           AND active = 1
-         ORDER BY partition_id
+            SELECT DISTINCT partition_id, partition
+              FROM system.parts
+             WHERE (active = 1)
+               AND (database = %(database)s)
+               AND (table = %(table_name)s)
+          ORDER BY partition_id
         """,
         )
-        result = self.client.execute(query, {'table_name': self.table_name})
+        result = self.client.execute(
+            query, {'database': self.database, 'table_name': self.table_name}
+        )
 
-        # Get partitions to exclude
-        excluded_partitions = self.get_recent_single_part_partitions()
-        if excluded_partitions:
-            LOGGER.info(
+        optimized = self._get_optimized_partitions()
+        if optimized:
+            LOGGER.debug(
                 'Excluding %d recent single-part partitions: %s',
-                len(excluded_partitions),
-                ', '.join(sorted(excluded_partitions)),
+                len(optimized),
+                ', '.join(sorted(optimized)),
             )
 
-        # Filter out excluded partitions
         return [
             {'partition_id': row[0], 'partition': row[1]}
             for row in result
-            if row[0] not in excluded_partitions
+            if row[0] not in optimized
         ]
 
-    def check_active_merges(
-        self, partition_id: str = ''
-    ) -> list[dict[str, typing.Any]]:
+    def _optimize_partition(self, partition_id: str, name: str) -> None:
+        """Optimize a specific partition and wait for completion."""
+        task = self.progress.add_task(
+            f'Processing partition {name}', total=1, start=False
+        )
+        active_merge = self._get_active_merge(partition_id)
+        if active_merge:
+            start_time = time.time() - active_merge.elapsed
+            self.progress_tasks[task].start_time = start_time
+            if self.progress_tasks[self.optimize_task].start_time > start_time:
+                self.progress_tasks[self.optimize_task].start_time = start_time
+
+        self.progress.start_task(task)
+        if not active_merge:
+            query = re.sub(
+                r'\s+',
+                ' ',
+                f"""\
+                OPTIMIZE TABLE {self.database}.{self.table_name}
+                  PARTITION ID '{partition_id}'
+                         FINAL""",
+            )
+            try:
+                self.client.execute(query)
+            except TimeoutError:
+                LOGGER.debug('Query timeout, polling for merges...')
+
+        elapsed = time.time() - self.start_time
+        while elapsed < self.optimize_timeout:
+            active_merge = self._get_active_merge(partition_id)
+            if not active_merge:
+                break
+            self.progress.update(task, completed=active_merge.progress)
+            time.sleep(self.poll_interval)
+            elapsed = time.time() - self.start_time
+
+        if elapsed >= self.optimize_timeout:
+            raise TimeoutError(
+                f'Optimization did not complete within '
+                f'{self.optimize_timeout}s'
+            )
+        self.progress.remove_task(task)
+
+    def _get_active_merge(self, partition_id: str = '') -> ActiveMerge | None:
         """Check for active merges on a table or specific partition."""
         query = re.sub(
             r'\s+',
             ' ',
             """\
-        SELECT partition_id, partition, progress, elapsed
-          FROM system.merges
-         WHERE table = %(table_name)s
-        """,
+            SELECT database, table, partition_id, progress, elapsed
+              FROM system.merges
+             WHERE database = %(database)s
+               AND table = %(table_name)s""",
         )
-        params = {'table_name': self.table_name}
+        params = {'database': self.database, 'table_name': self.table_name}
 
         if partition_id:
             query += ' AND partition_id = %(partition_id)s'
             params['partition_id'] = partition_id
 
         result = self.client.execute(query, params)
-        return [
-            {
-                'partition_id': row[0],
-                'partition': row[1],
-                'progress': row[2],
-                'elapsed': row[3],
-            }
-            for row in result
-        ]
-
-    def wait_for_merges_completion(self, partition_id: str = '') -> None:
-        """Wait for merges to complete on a table or partition."""
-        start_time = time.time()
-
-        while True:
-            active_merges = self.check_active_merges(partition_id)
-
-            if not active_merges:
-                LOGGER.debug(
-                    'No active merges found for %s:%s',
-                    self.table_name,
-                    partition_id,
-                )
-                break
-
-            elapsed = time.time() - start_time
-            if elapsed > self.optimize_timeout:
-                raise TimeoutError(
-                    f'Merges did not complete within {self.optimize_timeout}s '
-                    f'for {self.table_name}:{partition_id}'
-                )
-
-            # Log merge progress - use console if available to avoid
-            # interfering with progress bars
-            for merge in active_merges:
-                msg = (
-                    f'Merge in progress for partition {merge["partition"]} '
-                    f'(ID: {merge["partition_id"]}) - '
-                    f'{merge["progress"]:.1f}% '
-                    f'({merge["elapsed"]:.1f}s elapsed)'
-                )
-                if (
-                    hasattr(self, '_progress_console')
-                    and self._progress_console
-                ):
-                    self._progress_console.log(msg)
-                else:
-                    LOGGER.info(msg)
-
-            LOGGER.debug(
-                'Waiting %ss before next merge check...', self.poll_interval
-            )
-            time.sleep(self.poll_interval)
-
-    def optimize_partition(self, partition_id: str) -> None:
-        """Optimize a specific partition and wait for completion."""
-        query = re.sub(
-            r'\s+',
-            ' ',
-            f"""\
-        OPTIMIZE TABLE {self.table_name}
-          PARTITION ID '{partition_id}'
-                 FINAL""",
-        )
-        if self.dry_run:
-            LOGGER.info('Would execute: %s', query)
-            LOGGER.info(
-                'Would wait for merges to complete on partition %s',
-                partition_id,
-            )
-        else:
-            LOGGER.debug('Executing: %s', query)
-            try:
-                # Execute the optimize command - this may timeout but that's OK
-                # We'll poll for merge completion regardless
-                self.client.execute(query)
-            except (errors.Error, OSError) as exc:
-                # Log the error but continue - the merge may still be running
-                LOGGER.warning(
-                    'OPTIMIZE command may have timed out for partition %s: %s',
-                    partition_id,
-                    exc,
-                )
-                LOGGER.info('Continuing to monitor merge progress...')
-
-            # Wait for any merges on this partition to complete
-            msg = (
-                f'Waiting for merges to complete on partition '
-                f'{partition_id}...'
-            )
-            if hasattr(self, '_progress_console') and self._progress_console:
-                self._progress_console.log(msg)
-            else:
-                LOGGER.info(msg)
-
-            self.wait_for_merges_completion(partition_id)
-
-            msg = f'Partition {partition_id} optimization complete'
-            if hasattr(self, '_progress_console') and self._progress_console:
-                self._progress_console.log(msg)
-            else:
-                LOGGER.info(msg)
-
-    def load_checkpoint(self) -> set[str]:
-        """Load completed partitions from checkpoint file."""
-        if not self.checkpoint_file or not self.checkpoint_file.exists():
-            return set()
-
-        try:
-            completed = set()
-            with self.checkpoint_file.open('r', encoding='ascii') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        completed.add(line)
-            LOGGER.info(
-                'Loaded %d completed partitions from checkpoint: %s',
-                len(completed),
-                self.checkpoint_file,
-            )
-            return completed
-        except (OSError, UnicodeDecodeError) as exc:
-            LOGGER.warning(
-                'Failed to load checkpoint file %s: %s',
-                self.checkpoint_file,
-                exc,
-            )
-            return set()
-
-    def save_partition_to_checkpoint(self, partition_id: str) -> None:
-        """Save a completed partition to the checkpoint file."""
-        if not self.checkpoint_file:
-            return
-
-        try:
-            # Ensure directory exists
-            self.checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Append partition ID with timestamp comment
-            timestamp = datetime.datetime.now(datetime.UTC).strftime(
-                '%Y-%m-%d %H:%M:%S'
-            )
-            with self.checkpoint_file.open('a', encoding='ascii') as f:
-                f.write(f'{partition_id}  # completed at {timestamp}\n')
-
-            LOGGER.debug('Saved partition %s to checkpoint file', partition_id)
-        except OSError as exc:
-            LOGGER.warning(
-                'Failed to save partition %s to checkpoint file: %s',
-                partition_id,
-                exc,
-            )
-
-    def optimize_table(self) -> None:
-        LOGGER.info('Starting optimization of table: %s', self.table_name)
-        partitions = self.get_table_partitions()
-
-        if not partitions:
-            LOGGER.warning(
-                'No active partitions found for table %s', self.table_name
-            )
-            return
-
-        # Load checkpoint to filter out already completed partitions
-        completed_partitions = self.load_checkpoint()
-        if completed_partitions:
-            partitions = [
-                p
-                for p in partitions
-                if p['partition_id'] not in completed_partitions
-            ]
-            LOGGER.info(
-                'Filtered out %d already completed partitions',
-                len(self.get_table_partitions()) - len(partitions),
-            )
-
-        if not partitions:
-            LOGGER.info('All partitions already completed')
-            return
-
-        LOGGER.info('Found %s partitions to optimize', len(partitions))
-
-        # Optimize each partition
-        start_time = time.time()
-        partition_times = []
-
-        with progress.Progress(
-            progress.SpinnerColumn(),
-            progress.TextColumn('[progress.description]{task.description}'),
-            progress.BarColumn(),
-            progress.TaskProgressColumn(),
-            progress.TimeElapsedColumn(),
-            progress.TimeRemainingColumn(),
-            console=self.console,
-        ) as prog:
-            # Store progress console reference for logging during
-            # progress display
-            self._progress_console = prog.console
-            task = prog.add_task(
-                'Optimizing partitions...', total=len(partitions)
-            )
-
-            for i, partition in enumerate(partitions):
-                partition_id = partition['partition_id']
-                partition_value = partition['partition']
-                partition_start = time.time()
-
-                prog.update(
-                    task,
-                    description=(
-                        f'Optimizing partition {partition_value} '
-                        f'(ID: {partition_id})'
-                    ),
-                )
-
-                try:
-                    self.optimize_partition(partition_id)
-                    partition_end = time.time()
-                    partition_duration = partition_end - partition_start
-                    partition_times.append(partition_duration)
-
-                    # Save to checkpoint
-                    self.save_partition_to_checkpoint(partition_id)
-
-                    # Log timing info with ETA
-                    avg_time = sum(partition_times) / len(partition_times)
-                    remaining_partitions = len(partitions) - (i + 1)
-                    eta_seconds = remaining_partitions * avg_time
-
-                    msg = (
-                        f'Partition {partition_id} done in '
-                        f'{partition_duration:.1f}s '
-                        f'(avg/ETA: {avg_time:.1f}s/{eta_seconds:.1f}s)'
-                    )
-                    if (
-                        hasattr(self, '_progress_console')
-                        and self._progress_console
-                    ):
-                        self._progress_console.log(msg)
-                    else:
-                        LOGGER.info(msg)
-
-                    prog.advance(task)
-                except Exception as exc:
-                    LOGGER.error(
-                        'Failed to optimize partition %s: %s',
-                        partition_id,
-                        exc,
-                    )
-                    raise
-
-        # Clear progress console reference
-        self._progress_console = None
-
-        total_time = time.time() - start_time
-        action = 'Would optimize' if self.dry_run else 'Optimized'
-        LOGGER.info(
-            '%s %s partitions for table %s in %.1fs',
-            action,
-            len(partitions),
-            self.table_name,
-            total_time,
-        )
+        for row in result:
+            if (
+                row[0] == self.database
+                and row[1] == self.table_name
+                and row[2] == partition_id
+            ):
+                return ActiveMerge(progress=row[3], elapsed=row[4])
+        return None

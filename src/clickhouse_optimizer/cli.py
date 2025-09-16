@@ -28,14 +28,10 @@ def main() -> None:
     rich_console = console.Console()
     ch_optimizer = optimizer.ClickHouseOptimizer(optimizer_settings)
     try:
-        ch_optimizer.optimize_table()
+        ch_optimizer.run()
     except (KeyboardInterrupt, SystemExit):
         rich_console.print('[yellow]Operation cancelled[/yellow]')
         sys.exit(130)
     except (OSError, ValueError, TypeError, RuntimeError) as e:
         rich_console.print(f'[red]Error: {e}[/red]')
         sys.exit(1)
-
-
-if __name__ == '__main__':
-    main()
