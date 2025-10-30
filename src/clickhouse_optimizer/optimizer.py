@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import pathlib
 import re
 import time
 import typing
@@ -38,7 +37,6 @@ class ClickHouseOptimizer:
             database=optimizer_settings.database,
         )
         self.console = console.Console()
-        self.dry_run = optimizer_settings.dry_run
         self.optimize_timeout = optimizer_settings.optimize_timeout
         self.optimize_task: progress.TaskID | None = None
         self.poll_interval = optimizer_settings.poll_interval
@@ -54,11 +52,6 @@ class ClickHouseOptimizer:
         )
         self.start_time: float | None = None
         self.table_name = optimizer_settings.table_name
-        self.checkpoint_file = (
-            pathlib.Path(optimizer_settings.checkpoint_file)
-            if optimizer_settings.checkpoint_file
-            else None
-        )
         self.database = optimizer_settings.database
 
     def run(self) -> None:
