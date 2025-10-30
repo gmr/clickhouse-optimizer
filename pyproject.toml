@@ -36,6 +36,7 @@ classifiers = [
 dependencies = [
   'clickhouse-driver>=0.2.6',
   'pydantic>=2.11.3,<3',
+  "pydantic-settings",
   'rich>=13.0.0',
 ]
 
