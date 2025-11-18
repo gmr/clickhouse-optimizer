@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pydantic
 import pydantic_settings
 
@@ -39,6 +41,51 @@ class OptimizerSettings(pydantic_settings.BaseSettings):
     verbose: bool = pydantic.Field(
         default=False, description='Enable verbose logging'
     )
+    min_date: datetime.date | None = pydantic.Field(
+        default=None,
+        description='Minimum partition date to optimize (YYYY-MM-DD)',
+        alias='min-date',
+    )
+    max_date: datetime.date | None = pydantic.Field(
+        default=None,
+        description='Maximum partition date to optimize (YYYY-MM-DD)',
+        alias='max-date',
+    )
     table_name: pydantic_settings.CliPositionalArg[str] = pydantic.Field(
         description='Table to optimize'
     )
+
+    @pydantic.field_validator('min_date')
+    @classmethod
+    def validate_min_date(
+        cls, value: datetime.date | None
+    ) -> datetime.date | None:
+        """Validate that min_date is not in the future."""
+        if value is not None:
+            today = datetime.datetime.now(tz=datetime.UTC).date()
+            if value > today:
+                raise ValueError('min_date cannot be in the future')
+        return value
+
+    @pydantic.field_validator('max_date')
+    @classmethod
+    def validate_max_date(
+        cls, value: datetime.date | None
+    ) -> datetime.date | None:
+        """Validate that max_date is not in the future."""
+        if value is not None:
+            today = datetime.datetime.now(tz=datetime.UTC).date()
+            if value > today:
+                raise ValueError('max_date cannot be in the future')
+        return value
+
+    @pydantic.model_validator(mode='after')
+    def validate_date_range(self) -> OptimizerSettings:
+        """Validate that min_date <= max_date."""
+        if (
+            self.min_date is not None
+            and self.max_date is not None
+            and self.min_date > self.max_date
+        ):
+            raise ValueError('min_date cannot be greater than max_date')
+        return self

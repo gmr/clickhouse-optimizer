@@ -53,17 +53,32 @@ class ClickHouseOptimizer:
         self.start_time: float | None = None
         self.table_name = optimizer_settings.table_name
         self.database = optimizer_settings.database
+        self.min_date = optimizer_settings.min_date
+        self.max_date = optimizer_settings.max_date
 
     def run(self) -> None:
-        partitions = self._get_table_partitions()
-        if not partitions:
+        partitions, skipped_count = self._get_table_partitions()
+        if not partitions and not skipped_count:
+            if self.min_date or self.max_date:
+                date_filter = []
+                if self.min_date:
+                    date_filter.append(f'min_date >= {self.min_date}')
+                if self.max_date:
+                    date_filter.append(f'max_date <= {self.max_date}')
+                raise ValueError(
+                    f'No partitions found for table {self.table_name} '
+                    f'with {" and ".join(date_filter)}'
+                )
             LOGGER.warning(
                 'No active partitions found for table %s', self.table_name
             )
             return
+
+        total_partitions = len(partitions) + skipped_count
         self.optimize_task = self.progress.add_task(
             f'Optimizing {self.database}.{self.table_name}',
-            total=len(partitions),
+            total=total_partitions,
+            completed=skipped_count,
         )
         self.progress.start()
         self.start_time = time.time()
@@ -100,8 +115,12 @@ class ClickHouseOptimizer:
         )
         return {row[0] for row in result}
 
-    def _get_table_partitions(self) -> list[dict[str, typing.Any]]:
-        """Get all partitions excluding recent single-part ones."""
+    def _get_table_partitions(self) -> tuple[list[dict[str, typing.Any]], int]:
+        """Get all partitions excluding recent single-part ones.
+
+        Returns:
+            A tuple of (partitions_to_optimize, skipped_partition_count)
+        """
         query = re.sub(
             r'\s+',
             ' ',
@@ -111,26 +130,49 @@ class ClickHouseOptimizer:
              WHERE (active = 1)
                AND (database = %(database)s)
                AND (table = %(table_name)s)
-          ORDER BY partition_id
         """,
         )
-        result = self.client.execute(
-            query, {'database': self.database, 'table_name': self.table_name}
-        )
+        params: dict[str, typing.Any] = {
+            'database': self.database,
+            'table_name': self.table_name,
+        }
 
-        optimized = self._get_optimized_partitions()
-        if optimized:
-            LOGGER.debug(
-                'Excluding %d recent single-part partitions: %s',
-                len(optimized),
-                ', '.join(sorted(optimized)),
+        if self.min_date:
+            query += ' AND (partition >= %(min_date)s)'
+            params['min_date'] = self.min_date.isoformat()
+            LOGGER.info(
+                'Filtering partitions to min_date >= %s', self.min_date
             )
 
-        return [
+        if self.max_date:
+            query += ' AND (partition <= %(max_date)s)'
+            params['max_date'] = self.max_date.isoformat()
+            LOGGER.info(
+                'Filtering partitions to max_date <= %s', self.max_date
+            )
+
+        query += ' ORDER BY partition_id'
+
+        result = self.client.execute(query, params)
+
+        optimized = self._get_optimized_partitions()
+        partitions_to_optimize = [
             {'partition_id': row[0], 'partition': row[1]}
             for row in result
             if row[0] not in optimized
         ]
+
+        skipped_count = len(result) - len(partitions_to_optimize)
+        if skipped_count:
+            LOGGER.info(
+                'Skipping %d already-optimized single-part partitions',
+                skipped_count,
+            )
+            LOGGER.debug(
+                'Skipped partitions: %s', ', '.join(sorted(optimized))
+            )
+
+        return partitions_to_optimize, skipped_count
 
     def _optimize_partition(self, partition_id: str, name: str) -> None:
         """Optimize a specific partition and wait for completion."""
