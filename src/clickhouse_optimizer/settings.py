@@ -41,6 +41,10 @@ class OptimizerSettings(pydantic_settings.BaseSettings):
     verbose: bool = pydantic.Field(
         default=False, description='Enable verbose logging'
     )
+    cluster: str | None = pydantic.Field(
+        default=None,
+        description='Cluster name for cluster-wide merge monitoring',
+    )
     min_date: datetime.date | None = pydantic.Field(
         default=None,
         description='Minimum partition date to optimize (YYYY-MM-DD)',

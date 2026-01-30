@@ -55,6 +55,7 @@ class ClickHouseOptimizer:
         self.database = optimizer_settings.database
         self.min_date = optimizer_settings.min_date
         self.max_date = optimizer_settings.max_date
+        self.cluster = optimizer_settings.cluster
 
     def run(self) -> None:
         partitions, skipped_count = self._get_table_partitions()
@@ -179,7 +180,7 @@ class ClickHouseOptimizer:
         task = self.progress.add_task(
             f'Processing partition {name}', total=1, start=False
         )
-        active_merge = self._get_active_merge(partition_id)
+        active_merge = self._is_table_busy(partition_id)
         if active_merge:
             start_time = time.time() - active_merge.elapsed
             self.progress_tasks[task].start_time = start_time
@@ -201,12 +202,29 @@ class ClickHouseOptimizer:
             except TimeoutError:
                 LOGGER.debug('Query timeout, polling for merges...')
 
+            # Wait for merge to appear (replicated tables schedule async)
+            for attempt in range(10):
+                time.sleep(1)
+                if self._is_table_busy(partition_id):
+                    LOGGER.debug(
+                        'Merge appeared after %d seconds for partition %s',
+                        attempt + 1,
+                        partition_id,
+                    )
+                    break
+            else:
+                LOGGER.warning(
+                    'Merge did not appear after OPTIMIZE for partition %s',
+                    partition_id,
+                )
+
         elapsed = time.time() - self.start_time
         while elapsed < self.optimize_timeout:
-            active_merge = self._get_active_merge(partition_id)
-            if not active_merge:
+            busy = self._is_table_busy(partition_id)
+            if not busy:
                 break
-            self.progress.update(task, completed=active_merge.progress)
+            if busy.progress > 0:
+                self.progress.update(task, completed=busy.progress)
             time.sleep(self.poll_interval)
             elapsed = time.time() - self.start_time
 
@@ -219,16 +237,32 @@ class ClickHouseOptimizer:
 
     def _get_active_merge(self, partition_id: str = '') -> ActiveMerge | None:
         """Check for active merges on a table or specific partition."""
-        query = re.sub(
-            r'\s+',
-            ' ',
-            """\
-            SELECT database, table, partition_id, progress, elapsed
-              FROM system.merges
-             WHERE database = %(database)s
-               AND table = %(table_name)s""",
-        )
-        params = {'database': self.database, 'table_name': self.table_name}
+        if self.cluster:
+            query = re.sub(
+                r'\s+',
+                ' ',
+                """\
+                SELECT database, table, partition_id, progress, elapsed
+                  FROM clusterAllReplicas(%(cluster)s, system.merges)
+                 WHERE database = %(database)s
+                   AND table = %(table_name)s""",
+            )
+            params: dict[str, typing.Any] = {
+                'cluster': self.cluster,
+                'database': self.database,
+                'table_name': self.table_name,
+            }
+        else:
+            query = re.sub(
+                r'\s+',
+                ' ',
+                """\
+                SELECT database, table, partition_id, progress, elapsed
+                  FROM system.merges
+                 WHERE database = %(database)s
+                   AND table = %(table_name)s""",
+            )
+            params = {'database': self.database, 'table_name': self.table_name}
 
         if partition_id:
             query += ' AND partition_id = %(partition_id)s'
@@ -239,7 +273,59 @@ class ClickHouseOptimizer:
             if (
                 row[0] == self.database
                 and row[1] == self.table_name
-                and row[2] == partition_id
+                and (not partition_id or row[2] == partition_id)
             ):
                 return ActiveMerge(progress=row[3], elapsed=row[4])
+        return None
+
+    def _has_pending_merge(self, partition_id: str = '') -> bool:
+        """Check for pending OPTIMIZE/MERGE entries in replication queue."""
+        if self.cluster:
+            query = re.sub(
+                r'\s+',
+                ' ',
+                """\
+                SELECT 1
+                  FROM clusterAllReplicas(
+                           %(cluster)s, system.replication_queue)
+                 WHERE database = %(database)s
+                   AND table = %(table_name)s
+                   AND type = 'MERGE_PARTS'""",
+            )
+            params: dict[str, typing.Any] = {
+                'cluster': self.cluster,
+                'database': self.database,
+                'table_name': self.table_name,
+            }
+        else:
+            query = re.sub(
+                r'\s+',
+                ' ',
+                """\
+                SELECT 1
+                  FROM system.replication_queue
+                 WHERE database = %(database)s
+                   AND table = %(table_name)s
+                   AND type = 'MERGE_PARTS'""",
+            )
+            params = {'database': self.database, 'table_name': self.table_name}
+
+        if partition_id:
+            query += ' AND new_part_name LIKE %(partition_pattern)s'
+            params['partition_pattern'] = f'{partition_id}%'
+
+        query += ' LIMIT 1'
+
+        result = self.client.execute(query, params)
+        return len(result) > 0
+
+    def _is_table_busy(self, partition_id: str = '') -> ActiveMerge | None:
+        """Check if table has any active or pending merges."""
+        active = self._get_active_merge(partition_id)
+        if active:
+            return active
+
+        if self._has_pending_merge(partition_id):
+            return ActiveMerge(progress=0.0, elapsed=0.0)
+
         return None
