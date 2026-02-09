@@ -55,7 +55,20 @@ class TestMain(unittest.TestCase):
 
     @mock.patch('clickhouse_optimizer.cli.optimizer')
     @mock.patch('clickhouse_optimizer.cli.settings')
-    def test_main_system_exit(
+    def test_main_system_exit_preserves_code(
+        self, mock_settings: mock.Mock, mock_optimizer: mock.Mock
+    ) -> None:
+        mock_settings.OptimizerSettings.return_value = mock.Mock(verbose=False)
+        mock_optimizer.ClickHouseOptimizer.return_value.run.side_effect = (
+            SystemExit(42)
+        )
+        with self.assertRaises(SystemExit) as ctx:
+            cli.main()
+        self.assertEqual(ctx.exception.code, 42)
+
+    @mock.patch('clickhouse_optimizer.cli.optimizer')
+    @mock.patch('clickhouse_optimizer.cli.settings')
+    def test_main_system_exit_no_code(
         self, mock_settings: mock.Mock, mock_optimizer: mock.Mock
     ) -> None:
         mock_settings.OptimizerSettings.return_value = mock.Mock(verbose=False)
@@ -64,7 +77,7 @@ class TestMain(unittest.TestCase):
         )
         with self.assertRaises(SystemExit) as ctx:
             cli.main()
-        self.assertEqual(ctx.exception.code, 130)
+        self.assertIsNone(ctx.exception.code)
 
     @mock.patch('clickhouse_optimizer.cli.optimizer')
     @mock.patch('clickhouse_optimizer.cli.settings')
