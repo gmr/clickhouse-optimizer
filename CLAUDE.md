@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Running the Tool
 - `uvx clickhouse-optimizer --help` - Show CLI help and all options
 - `uvx clickhouse-optimizer --verbose <table>` - Run with detailed logging
-- Environment variables can be used for connection settings (CH_HOST, CH_USER, etc.)
+- Environment variables can be used for connection settings (CLICKHOUSE_HOST, CLICKHOUSE_USER, etc.)
 
 ## Architecture
 
@@ -35,7 +35,10 @@ This is a single-purpose CLI tool for optimizing ClickHouse table partitions inc
 
 **Optimizer (`optimizer.py`)**
 - Main business logic for partition optimization
-- Queries `system.parts` and `system.merges` tables for partition discovery and merge monitoring
+- Queries `system.parts`, `system.merges`, and `system.replication_queue` for partition discovery, merge monitoring, and pending merge detection
+- Supports cluster-wide merge monitoring via `clusterAllReplicas()` for replicated tables
+- Skips already-optimized single-part partitions automatically
+- Supports date range filtering with `--min-date` / `--max-date`
 - Implements timeout handling and progress tracking with Rich library
 - Performs sequential partition optimization with timing metrics and ETA calculation
 

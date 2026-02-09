@@ -54,10 +54,10 @@ clickhouse-optimizer --verbose --host ch.example.com --user admin --password sec
 Set connection parameters via environment variables:
 
 ```bash
-export CH_HOST=ch.example.com
-export CH_USER=admin
-export CH_PASSWORD=secret
-export CH_DATABASE=mydb
+export CLICKHOUSE_HOST=ch.example.com
+export CLICKHOUSE_USER=admin
+export CLICKHOUSE_PASSWORD=secret
+export CLICKHOUSE_DATABASE=mydb
 
 clickhouse-optimizer mytable
 ```
@@ -76,15 +76,15 @@ clickhouse-optimizer \
 
 | Option | Environment Variable | Description | Default |
 |--------|---------------------|-------------|---------|
-| `--host` | `CH_HOST` | ClickHouse server hostname | Required |
-| `--port` | `CH_PORT` | ClickHouse server port | 9440 |
-| `--database` | `CH_DATABASE` | Database name | Required |
-| `--user` | `CH_USER` | Username for authentication | Required |
-| `--password` | `CH_PASSWORD` | Password for authentication | Required |
-| `--secure` | `CH_SECURE` | Use secure connection | False |
-| `--verbose` | `CH_VERBOSE` | Enable verbose logging | False |
-| `--optimize-timeout` | `CH_OPTIMIZE_TIMEOUT` | Max seconds to wait for merges | 43200 (12h) |
-| `--poll-interval` | `CH_POLL_INTERVAL` | Seconds between status checks | 5 |
+| `--host` | `CLICKHOUSE_HOST` | ClickHouse server hostname | Required |
+| `--port` | `CLICKHOUSE_PORT` | ClickHouse server port | 9440 |
+| `--database` | `CLICKHOUSE_DATABASE` | Database name | Required |
+| `--user` | `CLICKHOUSE_USER` | Username for authentication | Required |
+| `--password` | `CLICKHOUSE_PASSWORD` | Password for authentication | Required |
+| `--secure` | `CLICKHOUSE_SECURE` | Use secure connection | False |
+| `--verbose` | `CLICKHOUSE_VERBOSE` | Enable verbose logging | False |
+| `--optimize-timeout` | `CLICKHOUSE_OPTIMIZE_TIMEOUT` | Max seconds to wait for merges | 43200 (12h) |
+| `--poll-interval` | `CLICKHOUSE_POLL_INTERVAL` | Seconds between status checks | 5 |
 
 ## 🏗️ How It Works
 

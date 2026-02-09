@@ -15,6 +15,7 @@ class OptimizerSettings(pydantic_settings.BaseSettings):
         cli_parse_args=True,
         cli_enforce_required=True,
         cli_prog_name='clickhouse-optimizer',
+        env_prefix='CLICKHOUSE_',
     )
     host: str = pydantic.Field(description='ClickHouse server hostname')
     port: int = pydantic.Field(
