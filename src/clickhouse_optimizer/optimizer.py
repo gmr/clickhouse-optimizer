@@ -79,10 +79,11 @@ class ClickHouseOptimizer:
         self.optimize_task = self.progress.add_task(
             f'Optimizing {self.database}.{self.table_name}',
             total=total_partitions,
-            completed=skipped_count,
         )
         self.progress.start()
         self.start_time = time.time()
+        if skipped_count:
+            self.progress.update(self.optimize_task, completed=skipped_count)
         for partition in partitions:
             try:
                 self._optimize_partition(

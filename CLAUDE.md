@@ -5,20 +5,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Common Commands
 
 ### Development
-- `pip install -e '.[dev]'` - Install package in development mode with dev dependencies
-- `ruff check` - Run linting checks
-- `ruff format` - Format code (uses single quotes, 79 char line length)
-- `pre-commit run --all-files` - Run pre-commit hooks on all files
-- `python -m build` - Build package distributions
+- `uv sync` - Install package with dev dependencies
+- `uv run ruff check` - Run linting checks
+- `uv run ruff format` - Format code (uses single quotes, 79 char line length)
+- `uv run pre-commit run --all-files` - Run pre-commit hooks on all files
+- `uv build` - Build package distributions
 
 ### Testing & Coverage
-- `coverage run -m pytest` - Run tests with coverage tracking
-- `coverage report` - Show coverage report in terminal
-- `coverage html` - Generate HTML coverage report
+- `uv run coverage run -m pytest` - Run tests with coverage tracking
+- `uv run coverage report` - Show coverage report in terminal
+- `uv run coverage html` - Generate HTML coverage report
 
 ### Running the Tool
-- `clickhouse-optimizer --help` - Show CLI help and all options
-- `clickhouse-optimizer --verbose <table>` - Run with detailed logging
+- `uvx clickhouse-optimizer --help` - Show CLI help and all options
+- `uvx clickhouse-optimizer --verbose <table>` - Run with detailed logging
 - Environment variables can be used for connection settings (CH_HOST, CH_USER, etc.)
 
 ## Architecture
