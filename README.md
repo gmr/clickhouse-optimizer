@@ -25,16 +25,22 @@ This tool solves these problems by:
 
 ## 📦 Installation
 
+### pip
+
 ```bash
 pip install clickhouse-optimizer
 ```
 
-For development:
+### uvx (no install needed)
 
 ```bash
-git clone https://github.com/gmr/clickhouse-optimizer
-cd clickhouse-optimizer
-pip install -e '.[dev]'
+uvx clickhouse-optimizer --help
+```
+
+### Docker
+
+```bash
+docker pull gavinmroy/clickhouse-optimizer
 ```
 
 ## 🔧 Quick Start
@@ -60,6 +66,23 @@ export CLICKHOUSE_PASSWORD=secret
 export CLICKHOUSE_DATABASE=mydb
 
 clickhouse-optimizer mytable
+```
+
+### Docker
+
+```bash
+# Using CLI arguments
+docker run --rm gavinmroy/clickhouse-optimizer \
+  --host ch.example.com --user admin --password secret \
+  --database mydb mytable
+
+# Using environment variables
+docker run --rm \
+  -e CLICKHOUSE_HOST=ch.example.com \
+  -e CLICKHOUSE_USER=admin \
+  -e CLICKHOUSE_PASSWORD=secret \
+  -e CLICKHOUSE_DATABASE=mydb \
+  gavinmroy/clickhouse-optimizer mytable
 ```
 
 ### Advanced Options
@@ -113,44 +136,45 @@ Monitor optimization progress with detailed logging and progress tracking.
 ### Setup Development Environment
 
 ```bash
-# Install with development dependencies
-pip install -e '.[dev]'
+git clone https://github.com/gmr/clickhouse-optimizer
+cd clickhouse-optimizer
+uv sync
 
 # Install pre-commit hooks
-pre-commit install
+uv run pre-commit install
 ```
 
 ### Code Quality
 
 ```bash
 # Run linting
-ruff check
+uv run ruff check
 
 # Format code
-ruff format
+uv run ruff format
 
 # Run all pre-commit hooks
-pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 ### Testing
 
 ```bash
 # Run tests with coverage
-coverage run -m pytest
+uv run coverage run -m pytest
 
 # Show coverage report
-coverage report
+uv run coverage report
 
 # Generate HTML coverage report
-coverage html
+uv run coverage html
 ```
 
 ### Build
 
 ```bash
 # Build package distributions
-python -m build
+uv build
 ```
 
 ## 📄 License
