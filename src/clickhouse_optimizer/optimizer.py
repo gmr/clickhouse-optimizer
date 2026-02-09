@@ -49,6 +49,7 @@ class ClickHouseOptimizer:
             progress.TimeElapsedColumn(),
             progress.TimeRemainingColumn(),
             get_time=time.time,
+            speed_estimate_period=optimizer_settings.optimize_timeout,
         )
         self.start_time: float | None = None
         self.table_name = optimizer_settings.table_name

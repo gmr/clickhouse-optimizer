@@ -1,6 +1,6 @@
 [project]
 name = "clickhouse-optimizer"
-version = "1.0.0"
+version = "1.0.1"
 description = "CLI tool to incrementally optimize all partitions of ClickHouse tables"
 authors = [
   { name = "Gavin M. Roy", email = "gavinr@aweber.com" },
