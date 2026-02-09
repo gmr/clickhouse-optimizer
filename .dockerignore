@@ -1,0 +1,10 @@
+.*
+!/.dockerignore
+/build
+/dist
+/docs
+/env
+/tests
+**/__pycache__
+*.egg-info
+uv.lock

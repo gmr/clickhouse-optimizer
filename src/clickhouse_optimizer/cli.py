@@ -29,9 +29,11 @@ def main() -> None:
     ch_optimizer = optimizer.ClickHouseOptimizer(optimizer_settings)
     try:
         ch_optimizer.run()
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
         rich_console.print('[yellow]Operation cancelled[/yellow]')
         sys.exit(130)
+    except SystemExit:
+        raise
     except (OSError, ValueError, TypeError, RuntimeError) as e:
         rich_console.print(f'[red]Error: {e}[/red]')
         sys.exit(1)
